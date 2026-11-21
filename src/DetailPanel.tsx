@@ -1,10 +1,11 @@
 import { useMemo } from 'react'
-import { SCALE, formatBRL, type Filter, type Municipio } from './data'
+import { SCALE, formatBRL, parlLabel, type Filter, type Municipio, type Parlamentar } from './data'
+import { Avatar } from './Avatar'
 
 interface Props {
   municipio: Municipio
   anos: number[]
-  parlamentares: string[]
+  parlamentares: Parlamentar[]
   filter: Filter
   rank: { brasil: number; uf: number; totalBrasil: number; totalUf: number } | null
   onPickParl: (parl: number) => void
@@ -58,7 +59,7 @@ export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPi
           <span className="stat-value">{formatBRL(pago)}</span>
           <span className="stat-label">
             pago em {periodo}
-            {parl !== null && ` por ${parlamentares[parl]}`}
+            {parl !== null && ` por ${parlamentares[parl].nome}`}
           </span>
         </div>
         <div>
@@ -103,9 +104,19 @@ export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPi
             {porParlamentar.map(([p, v]) => (
               <tr key={p} className={p === parl ? 'highlight' : ''}>
                 <td>
-                  <button className="link-button" onClick={() => onPickParl(p)} title="Ver todos os municípios deste parlamentar">
-                    {parlamentares[p]}
-                  </button>
+                  <div className="person-cell">
+                    <Avatar parlamentar={parlamentares[p]} size={26} />
+                    <span className="person">
+                      <button
+                        className="link-button"
+                        onClick={() => onPickParl(p)}
+                        title="Ver todos os municípios deste parlamentar"
+                      >
+                        {parlamentares[p].nome}
+                      </button>
+                      <small>{parlLabel(parlamentares[p], true)}</small>
+                    </span>
+                  </div>
                 </td>
                 <td className="num">{formatBRL(v.pago)}</td>
                 <td className="num">{formatBRL(v.indicado)}</td>

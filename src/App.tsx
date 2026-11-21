@@ -8,6 +8,7 @@ import {
   formatMetric,
   metricValue,
   pagoOf,
+  parlLabel,
   quantileBreaks,
   type Dataset,
   type Filter,
@@ -17,6 +18,7 @@ import {
 } from './data'
 import { MapView, type Mesh } from './MapView'
 import { DetailPanel } from './DetailPanel'
+import { Avatar } from './Avatar'
 
 const normalize = (s: string) =>
   s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -168,8 +170,8 @@ export default function App() {
     return {
       municipios: inScope.filter((m) => normalize(m.nome).includes(q)).slice(0, 6),
       parlamentares: data.parlamentares
-        .map((nome, i) => [nome, i] as const)
-        .filter(([nome]) => normalize(nome).includes(q))
+        .map((p, i) => [p, i] as const)
+        .filter(([p]) => normalize(p.nome).includes(q))
         .slice(0, 6),
     }
   }, [data, inScope, query])
@@ -239,9 +241,22 @@ export default function App() {
 
         {parl !== null && (
           <div className="parl-chip">
-            <span>
-              Mostrando só as emendas de <strong>{data.parlamentares[parl]}</strong>
-            </span>
+            <Avatar parlamentar={data.parlamentares[parl]} size={48} />
+            <div className="parl-chip-text">
+              <span className="muted">Mostrando só as emendas de</span>
+              <strong>{data.parlamentares[parl].nome}</strong>
+              <small>
+                {parlLabel(data.parlamentares[parl])}
+                {data.parlamentares[parl].url && (
+                  <>
+                    {' · '}
+                    <a href={data.parlamentares[parl].url!} target="_blank" rel="noopener noreferrer">
+                      perfil oficial
+                    </a>
+                  </>
+                )}
+              </small>
+            </div>
             <button onClick={() => pickParl(null)} aria-label="Remover filtro de parlamentar">
               ×
             </button>
@@ -289,11 +304,13 @@ export default function App() {
                     </button>
                   </li>
                 ))}
-                {searchResults.parlamentares.map(([nome, i]) => (
+                {searchResults.parlamentares.map(([p, i]) => (
                   <li key={`p${i}`}>
                     <button onClick={() => pickParl(i)}>
-                      <span className="tag">parlamentar</span>
-                      {nome}
+                      <Avatar parlamentar={p} size={24} />
+                      <span className="person">
+                        {p.nome} <small>{parlLabel(p)}</small>
+                      </span>
                     </button>
                   </li>
                 ))}
@@ -349,9 +366,10 @@ export default function App() {
             <p className="muted">Nenhum repasse no filtro atual.</p>
           ) : (
             <ol>
-              {topMunicipios.map((m) => (
+              {topMunicipios.map((m, i) => (
                 <li key={m.id}>
                   <button onClick={() => selectMunicipio(m.id)}>
+                    <span className="rank-pos">{i + 1}</span>
                     <span className="rank-name">
                       {m.nome} <small>{m.uf}</small>
                     </span>
@@ -367,10 +385,15 @@ export default function App() {
           <section className="ranking">
             <h2>Parlamentares que mais enviaram {uf ? `para ${uf}` : ''}</h2>
             <ol>
-              {topParlamentares.map(([p, v]) => (
+              {topParlamentares.map(([p, v], i) => (
                 <li key={p}>
                   <button onClick={() => pickParl(p)} title="Ver no mapa para onde foi o dinheiro">
-                    <span className="rank-name">{data.parlamentares[p]}</span>
+                    <span className="rank-pos">{i + 1}</span>
+                    <Avatar parlamentar={data.parlamentares[p]} size={32} />
+                    <span className="rank-name person">
+                      {data.parlamentares[p].nome}
+                      <small>{parlLabel(data.parlamentares[p], true)}</small>
+                    </span>
                     <span className="rank-value">{formatBRL(v)}</span>
                   </button>
                 </li>
@@ -387,6 +410,9 @@ export default function App() {
             </li>
             <li>
               <strong>População:</strong> {data.meta.fontes.populacao}
+            </li>
+            <li>
+              <strong>Parlamentares:</strong> {data.meta.fontes.parlamentares}
             </li>
             <li>
               <strong>Mapa:</strong> {data.meta.fontes.malha}

@@ -11,15 +11,30 @@ export interface Municipio {
   emendas: Emenda[]
 }
 
+export interface Parlamentar {
+  nome: string
+  partido: string | null
+  uf: string | null
+  casa: 'Deputado' | 'Senador' | null
+  foto: string | null
+  url: string | null
+}
+
+export function parlLabel(p: Parlamentar, short = false): string {
+  const casa = !p.casa ? '' : short ? (p.casa === 'Senador' ? 'Sen.' : 'Dep.') : p.casa
+  const sigla = [p.partido, p.uf].filter(Boolean).join('-')
+  return [casa, sigla].filter(Boolean).join(' · ')
+}
+
 export interface Dataset {
   meta: {
     geradoEm: string
     anos: number[]
     populacaoAno: string
     totalPago: number
-    fontes: { emendas: string; populacao: string; malha: string }
+    fontes: { emendas: string; populacao: string; parlamentares: string; malha: string }
   }
-  parlamentares: string[]
+  parlamentares: Parlamentar[]
   municipios: Municipio[]
   estados: Record<string, number[]>
 }

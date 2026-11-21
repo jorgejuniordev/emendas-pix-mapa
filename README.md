@@ -5,6 +5,7 @@ Mapa interativo dos repasses de emendas Pix (transferências especiais, art. 166
 ## Dados
 
 - **Emendas:** [API de Transferências Especiais do Transferegov](https://api.transferegov.gestao.gov.br/transferenciasespeciais/). "Pago" é a soma dos documentos hábeis com ordem bancária enviada ao banco; "indicado" é o valor do plano de ação. O ano é o da emenda.
+- **Parlamentares:** dados abertos da [Câmara](https://dadosabertos.camara.leg.br/) e do [Senado](https://legis.senado.leg.br/dadosabertos/) (legislaturas 56 e 57): foto, partido e estado mais recentes. O nome do Transferegov é cruzado com essas listas e validado pelo estado que mais recebeu emendas do parlamentar.
 - **População:** IBGE, estimativa mais recente (SIDRA 6579).
 - **Malha:** IBGE.
 

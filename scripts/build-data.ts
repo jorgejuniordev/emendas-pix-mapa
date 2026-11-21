@@ -26,6 +26,31 @@ const ALIASES: Record<string, string> = {
   'DISTRITO FEDERAL|DF': '5300108',
 }
 
+// Transferegov author names that the Câmara lists under another name (Câmara deputy id)
+const DEPUTY_ALIASES: Record<string, number> = {
+  Bozzella: 204502,
+  'Major Vitor Hugo': 179587,
+  'Vavá Martins': 204505,
+  'Luizão Goulart': 204418,
+  'Dayany Bittencourt': 220659,
+  'Rafael Fera': 233594,
+}
+
+// Legislatures covering the emendas Pix era (EC 105/2019 onwards)
+const LEGISLATURAS = [56, 57]
+
+type Pessoa = {
+  key: string
+  nome: string
+  partido: string | null
+  uf: string | null
+  casa: 'Deputado' | 'Senador'
+  foto: string | null
+  url: string
+  ultimaLegislatura: number
+  titular: boolean
+}
+
 type PlanoAcao = {
   id_plano_acao: number
   ano_plano_acao: number
@@ -151,6 +176,148 @@ async function loadPopulacao() {
   }
 }
 
+async function fetchJsonAccept<T>(url: string): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(120_000),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`)
+      return (await res.json()) as T
+    } catch (err) {
+      if (i >= 4) throw err
+      await new Promise((r) => setTimeout(r, 2000 * i))
+    }
+  }
+}
+
+const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v])
+
+async function loadPessoas(): Promise<Pessoa[]> {
+  console.log('Deputados (Câmara) e senadores (Senado)')
+  const pessoas = new Map<string, Pessoa>()
+
+  const legs = LEGISLATURAS.map((l) => `idLegislatura=${l}`).join('&')
+  for (let pagina = 1; ; pagina++) {
+    const { dados } = await fetchJsonAccept<{
+      dados: { id: number; nome: string; siglaPartido: string; siglaUf: string; idLegislatura: number; urlFoto: string }[]
+    }>(`https://dadosabertos.camara.leg.br/api/v2/deputados?${legs}&itens=100&pagina=${pagina}&ordem=ASC&ordenarPor=idLegislatura`)
+    if (!dados.length) break
+    for (const d of dados) {
+      const key = `D${d.id}`
+      const cur = pessoas.get(key)
+      if (cur && cur.ultimaLegislatura > d.idLegislatura) continue
+      pessoas.set(key, {
+        key,
+        nome: d.nome,
+        partido: d.siglaPartido || null,
+        uf: d.siglaUf || null,
+        casa: 'Deputado',
+        foto: d.urlFoto || null,
+        url: `https://www.camara.leg.br/deputados/${d.id}`,
+        ultimaLegislatura: d.idLegislatura,
+        titular: true,
+      })
+    }
+  }
+
+  type Mandato = {
+    UfParlamentar?: string
+    DescricaoParticipacao?: string
+    PrimeiraLegislaturaDoMandato?: { NumeroLegislatura: string }
+    SegundaLegislaturaDoMandato?: { NumeroLegislatura: string }
+    Exercicios?: unknown
+  }
+  const senado = await fetchJsonAccept<{
+    ListaParlamentarLegislatura: {
+      Parlamentares: {
+        Parlamentar: {
+          IdentificacaoParlamentar: {
+            CodigoParlamentar: string
+            NomeParlamentar: string
+            SiglaPartidoParlamentar?: string
+            UrlFotoParlamentar?: string
+          }
+          Mandatos: { Mandato: Mandato | Mandato[] }
+        }[]
+      }
+    }
+  }>(`https://legis.senado.leg.br/dadosabertos/senador/lista/legislatura/${LEGISLATURAS[0]}/${LEGISLATURAS.at(-1)}`)
+
+  for (const s of senado.ListaParlamentarLegislatura.Parlamentares.Parlamentar) {
+    // The list includes suplentes who never took office; only count mandates actually exercised
+    const exercidos = asArray(s.Mandatos.Mandato).filter((m) => m.Exercicios)
+    if (!exercidos.length) continue
+    const id = s.IdentificacaoParlamentar
+    const ultimo = exercidos.at(-1)!
+    const ultimaLegislatura = Math.max(
+      ...exercidos.flatMap((m) =>
+        [m.PrimeiraLegislaturaDoMandato, m.SegundaLegislaturaDoMandato]
+          .filter(Boolean)
+          .map((l) => Number(l!.NumeroLegislatura)),
+      ),
+    )
+    pessoas.set(`S${id.CodigoParlamentar}`, {
+      key: `S${id.CodigoParlamentar}`,
+      nome: id.NomeParlamentar,
+      partido: id.SiglaPartidoParlamentar ?? null,
+      uf: ultimo.UfParlamentar ?? null,
+      casa: 'Senador',
+      foto: (id.UrlFotoParlamentar ?? `https://www.senado.leg.br/senadores/img/fotos-oficiais/senador${id.CodigoParlamentar}.jpg`).replace(/^http:/, 'https:'),
+      url: `https://www25.senado.leg.br/web/senadores/senador/-/perfil/${id.CodigoParlamentar}`,
+      ultimaLegislatura,
+      titular: exercidos.some((m) => m.DescricaoParticipacao === 'Titular'),
+    })
+  }
+  const list = [...pessoas.values()]
+  console.log(`  ${list.filter((p) => p.casa === 'Deputado').length} deputados, ${list.filter((p) => p.casa === 'Senador').length} senadores`)
+  return list
+}
+
+function matchPessoas(nomes: string[], ufPrincipal: (string | null)[], pessoas: Pessoa[]) {
+  const key = (s: string) => compact(s.replace(/^(Dr|Dra)\.\s*/i, ''))
+  const byName = new Map<string, Pessoa[]>()
+  for (const p of pessoas) {
+    const k = key(p.nome)
+    byName.set(k, [...(byName.get(k) ?? []), p])
+  }
+  const byKey = new Map(pessoas.map((p) => [p.key, p]))
+  // Same person as deputy and senator: keep the most recent role. On ties a suplente who briefly
+  // took a Senate seat stays a deputy; an elected senator wins.
+  const rank = (p: Pessoa) => (p.casa === 'Deputado' ? 1 : p.titular ? 2 : 0)
+  const pick = (cands: Pessoa[]) =>
+    [...cands].sort((a, b) => b.ultimaLegislatura - a.ultimaLegislatura || rank(b) - rank(a))[0]
+
+  const fuzzy: string[] = []
+  const missing: string[] = []
+  const result = nomes.map((nome, i) => {
+    const uf = ufPrincipal[i]
+    const alias = DEPUTY_ALIASES[nome]
+    if (alias) return byKey.get(`D${alias}`) ?? null
+    const exact = byName.get(key(nome)) ?? []
+    const sameUf = exact.filter((p) => p.uf === uf)
+    if (sameUf.length) return pick(sameUf)
+    if (exact.length) {
+      fuzzy.push(`${nome} (${uf}) -> ${exact[0].nome} (${exact[0].casa}-${exact[0].uf}, outro estado)`)
+      return pick(exact)
+    }
+    let best: [Pessoa, number] | null = null
+    for (const p of pessoas) {
+      if (p.uf !== uf) continue
+      const s = similarity(key(nome), key(p.nome))
+      if (!best || s > best[1]) best = [p, s]
+    }
+    if (best && best[1] >= 0.8) {
+      fuzzy.push(`${nome} (${uf}) -> ${best[0].nome} (${best[0].casa})`)
+      return best[0]
+    }
+    missing.push(`${nome} (${uf})`)
+    return null
+  })
+  return { result, fuzzy, missing }
+}
+
 async function loadMesh() {
   console.log('Malha municipal (IBGE)')
   const cache = path.join(RAW_DIR, 'malha_municipios.json')
@@ -257,6 +424,7 @@ async function main() {
   const porMunicipio = new Map<string, Acc>()
   const porEstado = new Map<string, number[]>()
   const unmatched = new Map<string, number>()
+  const ufPorParlamentar = new Map<number, Map<string, number>>()
 
   for (const p of planos) {
     const indicado = (p.valor_custeio_plano_acao ?? 0) + (p.valor_investimento_plano_acao ?? 0)
@@ -281,6 +449,9 @@ async function main() {
     acc.pago[ai] += pago
     acc.indicado[ai] += indicado
     const parl = parlOf(p)
+    const ufs = ufPorParlamentar.get(parl) ?? new Map<string, number>()
+    ufs.set(uf, (ufs.get(uf) ?? 0) + indicado)
+    ufPorParlamentar.set(parl, ufs)
     const key = `${parl}|${p.ano_plano_acao}`
     const em = acc.emendas.get(key) ?? [parl, p.ano_plano_acao, 0, 0]
     em[2] += pago
@@ -288,6 +459,20 @@ async function main() {
     acc.emendas.set(key, em)
     porMunicipio.set(id, acc)
   }
+
+  // Parliamentarians send emendas to their own state, so the main destination validates name matches
+  const ufPrincipal = parlamentares.map((_, i) => {
+    const ufs = [...(ufPorParlamentar.get(i) ?? [])].sort((a, b) => b[1] - a[1])
+    return ufs[0]?.[0] ?? null
+  })
+  const pessoas = await loadPessoas()
+  const matched = matchPessoas(parlamentares, ufPrincipal, pessoas)
+  const parlamentaresOut = parlamentares.map((nome, i) => {
+    const p = matched.result[i]
+    return p
+      ? { nome, partido: p.partido, uf: p.uf, casa: p.casa, foto: p.foto, url: p.url }
+      : { nome, partido: null, uf: ufPrincipal[i], casa: null, foto: null, url: null }
+  })
 
   const round = (n: number) => Math.round(n)
   const out = municipios.map((m) => {
@@ -317,13 +502,15 @@ async function main() {
       emendas:
         'Transferegov, API de Transferências Especiais (emendas Pix): plano de ação, empenho, documento hábil e ordem bancária',
       populacao: `IBGE, população residente estimada ${populacao.ano} (SIDRA 6579)`,
+      parlamentares:
+        'Câmara dos Deputados e Senado Federal, dados abertos: partido, estado e foto mais recentes',
       malha: 'IBGE, malha municipal',
     },
   }
 
   await writeFile(
     path.join(OUT_DIR, 'emendas.json'),
-    JSON.stringify({ meta, parlamentares, municipios: out, estados: Object.fromEntries([...porEstado].map(([uf, v]) => [uf, v.map(round)])) }),
+    JSON.stringify({ meta, parlamentares: parlamentaresOut, municipios: out, estados: Object.fromEntries([...porEstado].map(([uf, v]) => [uf, v.map(round)])) }),
   )
   await writeFile(path.join(OUT_DIR, 'municipios.geojson'), JSON.stringify(mesh))
 
@@ -334,6 +521,9 @@ async function main() {
   console.log(`Correspondência aproximada de nomes (${matcher.fuzzy.length}):`)
   for (const f of matcher.fuzzy) console.log(`  ${f}`)
   if (unmatched.size) console.warn('Sem correspondência:', [...unmatched.keys()])
+  console.log(`Parlamentares: ${parlamentares.length - matched.missing.length} de ${parlamentares.length} identificados`)
+  for (const f of matched.fuzzy) console.log(`  ${f}`)
+  if (matched.missing.length) console.warn('  Não identificados:', matched.missing)
   console.log(
     `OK: pago ${bi(totalPago)} = municípios ${bi(pagoMunicipios)} + estados ${bi(pagoEstados)} + sem município ${bi(pagoSemMatch)}. ${porMunicipio.size} municípios receberam.`,
   )
