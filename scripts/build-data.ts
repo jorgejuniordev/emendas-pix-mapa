@@ -423,6 +423,7 @@ async function main() {
   type Acc = { pago: number[]; indicado: number[]; emendas: Map<string, [number, number, number, number]> }
   const porMunicipio = new Map<string, Acc>()
   const porEstado = new Map<string, number[]>()
+  const emendasEstado = new Map<string, Map<string, [number, number, number]>>()
   const unmatched = new Map<string, number>()
   const ufPorParlamentar = new Map<number, Map<string, number>>()
 
@@ -432,11 +433,23 @@ async function main() {
     const ai = anoIdx.get(p.ano_plano_acao)!
     const nome = p.nome_beneficiario_plano_acao
     const uf = p.uf_beneficiario_plano_acao
+    const countUf = (parl: number) => {
+      const ufs = ufPorParlamentar.get(parl) ?? new Map<string, number>()
+      ufs.set(uf, (ufs.get(uf) ?? 0) + indicado)
+      ufPorParlamentar.set(parl, ufs)
+    }
 
     if (isState(nome)) {
       const acc = porEstado.get(uf) ?? zeros()
       acc[ai] += pago
       porEstado.set(uf, acc)
+      const parl = parlOf(p)
+      countUf(parl)
+      const ems = emendasEstado.get(uf) ?? new Map<string, [number, number, number]>()
+      const em = ems.get(`${parl}|${p.ano_plano_acao}`) ?? [parl, p.ano_plano_acao, 0]
+      em[2] += pago
+      ems.set(`${parl}|${p.ano_plano_acao}`, em)
+      emendasEstado.set(uf, ems)
       continue
     }
 
@@ -449,9 +462,7 @@ async function main() {
     acc.pago[ai] += pago
     acc.indicado[ai] += indicado
     const parl = parlOf(p)
-    const ufs = ufPorParlamentar.get(parl) ?? new Map<string, number>()
-    ufs.set(uf, (ufs.get(uf) ?? 0) + indicado)
-    ufPorParlamentar.set(parl, ufs)
+    countUf(parl)
     const key = `${parl}|${p.ano_plano_acao}`
     const em = acc.emendas.get(key) ?? [parl, p.ano_plano_acao, 0, 0]
     em[2] += pago
@@ -510,7 +521,18 @@ async function main() {
 
   await writeFile(
     path.join(OUT_DIR, 'emendas.json'),
-    JSON.stringify({ meta, parlamentares: parlamentaresOut, municipios: out, estados: Object.fromEntries([...porEstado].map(([uf, v]) => [uf, v.map(round)])) }),
+    JSON.stringify({
+      meta,
+      parlamentares: parlamentaresOut,
+      municipios: out,
+      estados: Object.fromEntries([...porEstado].map(([uf, v]) => [uf, v.map(round)])),
+      emendasEstado: Object.fromEntries(
+        [...emendasEstado].map(([uf, ems]) => [
+          uf,
+          [...ems.values()].filter((e) => e[2] > 0).map(([parl, ano, pago]) => [parl, ano, round(pago)]),
+        ]),
+      ),
+    }),
   )
   await writeFile(path.join(OUT_DIR, 'municipios.geojson'), JSON.stringify(mesh))
 

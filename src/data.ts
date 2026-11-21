@@ -37,6 +37,29 @@ export interface Dataset {
   parlamentares: Parlamentar[]
   municipios: Municipio[]
   estados: Record<string, number[]>
+  // [parlamentar index, ano da emenda, valor pago] sent to the state government
+  emendasEstado: Record<string, [number, number, number][]>
+}
+
+export function pagoPorParlamentar(data: Dataset, year: number | null, uf = ''): Map<number, number> {
+  const acc = new Map<number, number>()
+  const add = (p: number, ano: number, v: number) => {
+    if (v > 0 && (year === null || ano === year)) acc.set(p, (acc.get(p) ?? 0) + v)
+  }
+  for (const m of data.municipios) {
+    if (uf && m.uf !== uf) continue
+    for (const [p, ano, v] of m.emendas) add(p, ano, v)
+  }
+  for (const [estado, ems] of Object.entries(data.emendasEstado)) {
+    if (uf && estado !== uf) continue
+    for (const [p, ano, v] of ems) add(p, ano, v)
+  }
+  return acc
+}
+
+export function pagoEstado(data: Dataset, uf: string, year: number | null): number {
+  const v = data.estados[uf] ?? []
+  return year === null ? v.reduce((a, b) => a + b, 0) : v[data.meta.anos.indexOf(year)] ?? 0
 }
 
 export type Metric = 'per_capita' | 'total'
@@ -85,7 +108,7 @@ export function classOf(v: number, breaks: number[]): number {
   return i
 }
 
-export function formatBRL(v: number, compact = true): string {
+export function formatBRL(v: number, compact = true, digits?: number): string {
   if (!compact || Math.abs(v) < 1000) {
     const digits = Number.isInteger(v) || v >= 100 ? 0 : 2
     return v.toLocaleString('pt-BR', {
@@ -102,7 +125,7 @@ export function formatBRL(v: number, compact = true): string {
   ]
   const [div, label] = units.find(([d]) => Math.abs(v) >= d)!
   const n = v / div
-  return `R$ ${n.toLocaleString('pt-BR', { maximumFractionDigits: n < 10 ? 1 : 0 })} ${label}`
+  return `R$ ${n.toLocaleString('pt-BR', { maximumFractionDigits: digits ?? (n < 10 ? 1 : 0) })} ${label}`
 }
 
 export function formatMetric(v: number, metric: Metric): string {
