@@ -1,13 +1,114 @@
 import { useMemo } from 'react'
-import { SCALE, formatBRL, parlLabel, type Filter, type Municipio, type Parlamentar } from './data'
+import {
+  SCALE,
+  formatBRL,
+  inYear,
+  parlLabel,
+  perCapitaOf,
+  periodLabel,
+  sum,
+  type Filter,
+  type Municipio,
+  type Parlamentar,
+} from './data'
+import type { Rank } from './mapStats'
 import { Avatar } from './Avatar'
+
+type Autoria = { pago: number; indicado: number }
+
+function pagoPorAno(municipio: Municipio, anos: number[], parl: number | null): number[] {
+  return anos.map((ano) =>
+    sum(municipio.emendas.filter(([p, a]) => a === ano && (parl === null || p === parl)).map((e) => e[2])),
+  )
+}
+
+function autoriasNoPeriodo(municipio: Municipio, year: number | null): [number, Autoria][] {
+  const acc = new Map<number, Autoria>()
+  for (const [p, ano, pago, indicado] of municipio.emendas) {
+    if (!inYear(ano, year)) continue
+    const cur = acc.get(p) ?? { pago: 0, indicado: 0 }
+    cur.pago += pago
+    cur.indicado += indicado
+    acc.set(p, cur)
+  }
+  return [...acc].sort((a, b) => b[1].pago - a[1].pago || b[1].indicado - a[1].indicado)
+}
+
+function pagoNoPeriodo(porAno: number[], anos: number[], year: number | null): number {
+  if (year === null) return sum(porAno)
+  return porAno[anos.indexOf(year)]
+}
+
+const populacaoLabel = (pop: number | null) =>
+  pop ? `${pop.toLocaleString('pt-BR')} habitantes` : 'População não informada'
+
+function YearBars({ anos, porAno, year }: { anos: number[]; porAno: number[]; year: number | null }) {
+  const max = Math.max(1, ...porAno)
+  return (
+    <div className="years">
+      {anos.map((ano, i) => (
+        <div key={ano} className={`year ${year === ano ? 'active' : ''}`} title={formatBRL(porAno[i], false)}>
+          <div className="year-bar-track">
+            <div className="year-bar" style={{ height: `${(porAno[i] / max) * 100}%`, background: SCALE[3] }} />
+          </div>
+          <span>{String(ano).slice(2)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+interface AutoriasTableProps {
+  autorias: [number, Autoria][]
+  parlamentares: Parlamentar[]
+  highlight: number | null
+  onPickParl: (parl: number) => void
+}
+
+function AutoriasTable({ autorias, parlamentares, highlight, onPickParl }: AutoriasTableProps) {
+  if (autorias.length === 0) return <p className="muted">Nenhuma emenda Pix para este município no período.</p>
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Parlamentar</th>
+          <th className="num">Pago</th>
+          <th className="num">Indicado</th>
+        </tr>
+      </thead>
+      <tbody>
+        {autorias.map(([p, v]) => (
+          <tr key={p} className={p === highlight ? 'highlight' : ''}>
+            <td>
+              <div className="person-cell">
+                <Avatar parlamentar={parlamentares[p]} size={26} />
+                <span className="person">
+                  <button
+                    className="link-button"
+                    onClick={() => onPickParl(p)}
+                    title="Ver todos os municípios deste parlamentar"
+                  >
+                    {parlamentares[p].nome}
+                  </button>
+                  <small>{parlLabel(parlamentares[p], true)}</small>
+                </span>
+              </div>
+            </td>
+            <td className="num">{formatBRL(v.pago)}</td>
+            <td className="num">{formatBRL(v.indicado)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
 
 interface Props {
   municipio: Municipio
   anos: number[]
   parlamentares: Parlamentar[]
   filter: Filter
-  rank: { brasil: number; uf: number; totalBrasil: number; totalUf: number } | null
+  rank: Rank | null
   onPickParl: (parl: number) => void
   onClose: () => void
 }
@@ -15,32 +116,11 @@ interface Props {
 export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPickParl, onClose }: Props) {
   const { year, parl } = filter
 
-  const porAno = useMemo(
-    () =>
-      anos.map((ano) =>
-        municipio.emendas
-          .filter(([p, a]) => a === ano && (parl === null || p === parl))
-          .reduce((s, e) => s + e[2], 0),
-      ),
-    [municipio, anos, parl],
-  )
-  const maxAno = Math.max(1, ...porAno)
+  const porAno = useMemo(() => pagoPorAno(municipio, anos, parl), [municipio, anos, parl])
+  const autorias = useMemo(() => autoriasNoPeriodo(municipio, year), [municipio, year])
 
-  const porParlamentar = useMemo(() => {
-    const acc = new Map<number, { pago: number; indicado: number }>()
-    for (const [p, ano, pago, indicado] of municipio.emendas) {
-      if (year !== null && ano !== year) continue
-      const cur = acc.get(p) ?? { pago: 0, indicado: 0 }
-      cur.pago += pago
-      cur.indicado += indicado
-      acc.set(p, cur)
-    }
-    return [...acc].sort((a, b) => b[1].pago - a[1].pago || b[1].indicado - a[1].indicado)
-  }, [municipio, year])
-
-  const pago = year === null ? porAno.reduce((a, b) => a + b, 0) : porAno[anos.indexOf(year)]
-  const perCapita = municipio.pop ? pago / municipio.pop : 0
-  const periodo = year === null ? `${anos[0]}–${anos[anos.length - 1]}` : String(year)
+  const pago = pagoNoPeriodo(porAno, anos, year)
+  const periodo = periodLabel(anos, year)
 
   return (
     <div className="detail">
@@ -50,9 +130,7 @@ export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPi
       <h2>
         {municipio.nome} <small>{municipio.uf}</small>
       </h2>
-      <p className="muted">
-        {municipio.pop ? `${municipio.pop.toLocaleString('pt-BR')} habitantes` : 'População não informada'}
-      </p>
+      <p className="muted">{populacaoLabel(municipio.pop)}</p>
 
       <div className="detail-stats">
         <div>
@@ -63,7 +141,7 @@ export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPi
           </span>
         </div>
         <div>
-          <span className="stat-value">{formatBRL(perCapita, false)}</span>
+          <span className="stat-value">{formatBRL(perCapitaOf(pago, municipio.pop), false)}</span>
           <span className="stat-label">por habitante</span>
         </div>
       </div>
@@ -74,57 +152,10 @@ export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPi
         </p>
       )}
 
-      <div className="years">
-        {anos.map((ano, i) => (
-          <div key={ano} className={`year ${year === ano ? 'active' : ''}`} title={formatBRL(porAno[i], false)}>
-            <div className="year-bar-track">
-              <div
-                className="year-bar"
-                style={{ height: `${(porAno[i] / maxAno) * 100}%`, background: SCALE[3] }}
-              />
-            </div>
-            <span>{String(ano).slice(2)}</span>
-          </div>
-        ))}
-      </div>
+      <YearBars anos={anos} porAno={porAno} year={year} />
 
       <h3>Quem mandou o dinheiro ({periodo})</h3>
-      {porParlamentar.length === 0 ? (
-        <p className="muted">Nenhuma emenda Pix para este município no período.</p>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Parlamentar</th>
-              <th className="num">Pago</th>
-              <th className="num">Indicado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {porParlamentar.map(([p, v]) => (
-              <tr key={p} className={p === parl ? 'highlight' : ''}>
-                <td>
-                  <div className="person-cell">
-                    <Avatar parlamentar={parlamentares[p]} size={26} />
-                    <span className="person">
-                      <button
-                        className="link-button"
-                        onClick={() => onPickParl(p)}
-                        title="Ver todos os municípios deste parlamentar"
-                      >
-                        {parlamentares[p].nome}
-                      </button>
-                      <small>{parlLabel(parlamentares[p], true)}</small>
-                    </span>
-                  </div>
-                </td>
-                <td className="num">{formatBRL(v.pago)}</td>
-                <td className="num">{formatBRL(v.indicado)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <AutoriasTable autorias={autorias} parlamentares={parlamentares} highlight={parl} onPickParl={onPickParl} />
     </div>
   )
 }

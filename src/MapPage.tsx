@@ -6,40 +6,263 @@ import {
   formatBRL,
   formatMetric,
   metricValue,
-  pagoEstado,
   pagoOf,
   pagoPorParlamentar,
   parlLabel,
+  periodLabel,
   quantileBreaks,
   type Dataset,
   type Filter,
   type Metric,
   type Municipio,
+  type Parlamentar,
   type Theme,
 } from './data'
+import {
+  computeRank,
+  computeTotals,
+  focusOf,
+  governoPago,
+  legendLabels,
+  search,
+  type MapParams,
+  type SearchResults,
+  type Totals,
+} from './mapStats'
 import { MapView, type Mesh } from './MapView'
 import { DetailPanel } from './DetailPanel'
 import { Avatar } from './Avatar'
-import { Credit, Sources, ThemeToggle } from './Common'
+import { Credit, ExternalLink, Segmented, Sources, ThemeToggle, type Option } from './Common'
 
-const normalize = (s: string) =>
-  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+const TOP_MUNICIPIOS = 15
+const TOP_PARLAMENTARES = 10
 
-export interface MapParams {
-  uf: string
-  parl: number | null
-  year: number | null
+const METRIC_OPTIONS: Option<Metric>[] = [
+  { value: 'per_capita', label: 'Por habitante' },
+  { value: 'total', label: 'Valor total' },
+]
+
+const metricTitle = (metric: Metric) => (metric === 'per_capita' ? 'por habitante' : 'no total')
+const legendTitle = (metric: Metric) => (metric === 'per_capita' ? 'R$ por habitante' : 'Valor pago')
+
+function ParlChip({ parlamentar, onClear }: { parlamentar: Parlamentar; onClear: () => void }) {
+  return (
+    <div className="parl-chip">
+      <Avatar parlamentar={parlamentar} size={48} />
+      <div className="parl-chip-text">
+        <span className="muted">Mostrando só as emendas de</span>
+        <strong>{parlamentar.nome}</strong>
+        <small>
+          {parlLabel(parlamentar)}
+          {parlamentar.url && (
+            <>
+              {' · '}
+              <ExternalLink href={parlamentar.url}>perfil oficial</ExternalLink>
+            </>
+          )}
+        </small>
+      </div>
+      <button onClick={onClear} aria-label="Remover filtro de parlamentar">
+        ×
+      </button>
+    </div>
+  )
 }
 
-const focusOf = (data: Dataset, { uf, parl, year }: MapParams): string[] | null => {
-  const ids = data.municipios
-    .filter((m) =>
-      parl !== null
-        ? m.emendas.some(([ep, ano]) => ep === parl && (year === null || ano === year))
-        : uf && m.uf === uf,
-    )
-    .map((m) => m.id)
-  return ids.length ? ids : null
+function Counter({ value, label, note }: { value: string; label: string; note: string }) {
+  return (
+    <div className="counter">
+      <span className="counter-value">{value}</span>
+      <span className="counter-label">{label}</span>
+      <span className="counter-pct">{note}</span>
+    </div>
+  )
+}
+
+interface CountersProps {
+  totals: Totals
+  periodo: string
+  uf: string
+  municipiosNoEscopo: number
+}
+
+function Counters({ totals, periodo, uf, municipiosNoEscopo }: CountersProps) {
+  return (
+    <section className="counters">
+      <Counter value={formatBRL(totals.total)} label="pago a municípios" note={periodo} />
+      <Counter value={formatBRL(totals.perCapita, false)} label="por habitante" note={uf || 'Brasil'} />
+      <Counter
+        value={totals.receberam.toLocaleString('pt-BR')}
+        label="municípios receberam"
+        note={`de ${municipiosNoEscopo.toLocaleString('pt-BR')}`}
+      />
+    </section>
+  )
+}
+
+interface SearchBoxProps {
+  query: string
+  results: SearchResults
+  colorOf: (m: Municipio) => string
+  onQueryChange: (query: string) => void
+  onPickMunicipio: (id: string) => void
+  onPickParl: (parl: number) => void
+}
+
+function SearchBox({ query, results, colorOf, onQueryChange, onPickMunicipio, onPickParl }: SearchBoxProps) {
+  const hasResults = results.municipios.length > 0 || results.parlamentares.length > 0
+  return (
+    <div className="search">
+      <input
+        type="search"
+        placeholder="Buscar município ou parlamentar…"
+        value={query}
+        onChange={(e) => onQueryChange(e.target.value)}
+      />
+      {hasResults && (
+        <ul className="search-results">
+          {results.municipios.map((m) => (
+            <li key={m.id}>
+              <button onClick={() => onPickMunicipio(m.id)}>
+                <span className="dot" style={{ background: colorOf(m) }} />
+                {m.nome} <small>{m.uf}</small>
+              </button>
+            </li>
+          ))}
+          {results.parlamentares.map(([p, i]) => (
+            <li key={`p${i}`}>
+              <button onClick={() => onPickParl(i)}>
+                <Avatar parlamentar={p} size={24} />
+                <span className="person">
+                  {p.nome} <small>{parlLabel(p)}</small>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+interface FiltersProps {
+  anos: number[]
+  year: number | null
+  uf: string
+  onYearChange: (year: number | null) => void
+  onUfChange: (uf: string) => void
+}
+
+function Filters({ anos, year, uf, onYearChange, onUfChange }: FiltersProps) {
+  return (
+    <div className="row">
+      <label>
+        Período
+        <select value={year ?? ''} onChange={(e) => onYearChange(e.target.value ? Number(e.target.value) : null)}>
+          <option value="">{periodLabel(anos, null)}</option>
+          {anos.map((a) => (
+            <option key={a} value={a}>
+              {a}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Estado
+        <select value={uf} onChange={(e) => onUfChange(e.target.value)}>
+          <option value="">Brasil</option>
+          {UFS.map((u) => (
+            <option key={u} value={u}>
+              {u}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  )
+}
+
+interface MunicipiosRankingProps {
+  municipios: Municipio[]
+  metric: Metric
+  valueOf: (m: Municipio) => number
+  onSelect: (id: string) => void
+}
+
+function MunicipiosRanking({ municipios, metric, valueOf, onSelect }: MunicipiosRankingProps) {
+  return (
+    <section className="ranking">
+      <h2>Municípios que mais receberam {metricTitle(metric)}</h2>
+      {municipios.length === 0 && <p className="muted">Nenhum repasse no filtro atual.</p>}
+      {municipios.length > 0 && (
+        <ol>
+          {municipios.map((m, i) => (
+            <li key={m.id}>
+              <button onClick={() => onSelect(m.id)}>
+                <span className="rank-pos">{i + 1}</span>
+                <span className="rank-name">
+                  {m.nome} <small>{m.uf}</small>
+                </span>
+                <span className="rank-value">{formatMetric(valueOf(m), metric)}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+interface ParlamentaresRankingProps {
+  parlamentares: Parlamentar[]
+  rows: [number, number][]
+  uf: string
+  onPick: (parl: number) => void
+}
+
+function ParlamentaresRanking({ parlamentares, rows, uf, onPick }: ParlamentaresRankingProps) {
+  return (
+    <section className="ranking">
+      <h2>Parlamentares que mais enviaram {uf ? `para ${uf}` : ''}</h2>
+      <ol>
+        {rows.map(([p, v], i) => (
+          <li key={p}>
+            <button onClick={() => onPick(p)} title="Ver no mapa para onde foi o dinheiro">
+              <span className="rank-pos">{i + 1}</span>
+              <Avatar parlamentar={parlamentares[p]} size={32} />
+              <span className="rank-name person">
+                {parlamentares[p].nome}
+                <small>{parlLabel(parlamentares[p], true)}</small>
+              </span>
+              <span className="rank-value">{formatBRL(v)}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+    </section>
+  )
+}
+
+function Legend({ metric, periodo, breaks }: { metric: Metric; periodo: string; breaks: number[] }) {
+  return (
+    <div className="legend">
+      <span className="legend-title">
+        {legendTitle(metric)}, {periodo}
+      </span>
+      <div className="legend-scale">
+        <span className="legend-item">
+          <span className="swatch empty" />
+          não recebeu
+        </span>
+        {legendLabels(breaks).map((label, i) => (
+          <span key={i} className="legend-item">
+            <span className="swatch" style={{ background: SCALE[i] }} />
+            {label}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 interface Props {
@@ -78,6 +301,7 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
   const breaks = useMemo(() => quantileBreaks(data.municipios.map(valueOf)), [data, valueOf])
 
   const classOfMun = useCallback((m: Municipio) => classOf(valueOf(m), breaks), [valueOf, breaks])
+  const colorOf = useCallback((m: Municipio) => SCALE[Math.max(0, classOfMun(m))], [classOfMun])
 
   const tooltipOf = useCallback(
     (m: Municipio) => `${m.nome} (${m.uf}): ${formatMetric(valueOf(m), metric)}`,
@@ -85,71 +309,27 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
   )
 
   const inScope = useMemo(() => data.municipios.filter((m) => !uf || m.uf === uf), [data, uf])
-
-  const totals = useMemo(() => {
-    let total = 0
-    let pop = 0
-    let receberam = 0
-    for (const m of inScope) {
-      const v = pago.get(m.id) ?? 0
-      total += v
-      pop += m.pop ?? 0
-      if (v > 0) receberam++
-    }
-    return { total, perCapita: pop ? total / pop : 0, receberam }
-  }, [inScope, pago])
-
-  const estadoPago = useMemo(
-    () => (!uf || parl !== null ? 0 : pagoEstado(data, uf, year)),
-    [data, uf, year, parl],
-  )
+  const totals = useMemo(() => computeTotals(inScope, pago), [inScope, pago])
+  const estadoPago = useMemo(() => governoPago(data, { uf, parl, year }), [data, uf, year, parl])
 
   const topMunicipios = useMemo(
     () =>
       inScope
         .filter((m) => (pago.get(m.id) ?? 0) > 0)
         .sort((a, b) => valueOf(b) - valueOf(a))
-        .slice(0, 15),
+        .slice(0, TOP_MUNICIPIOS),
     [inScope, pago, valueOf],
   )
 
   const topParlamentares = useMemo(
-    () => [...pagoPorParlamentar(data, year, uf)].sort((a, b) => b[1] - a[1]).slice(0, 10),
+    () => [...pagoPorParlamentar(data, year, uf)].sort((a, b) => b[1] - a[1]).slice(0, TOP_PARLAMENTARES),
     [data, year, uf],
   )
 
-  const rank = useMemo(() => {
-    if (!selectedId) return null
-    const sel = byId.get(selectedId)
-    if (!sel) return null
-    const perCapita = (m: Municipio) => metricValue(pago.get(m.id) ?? 0, m, 'per_capita')
-    const received = data.municipios.filter((m) => (pago.get(m.id) ?? 0) > 0)
-    const v = perCapita(sel)
-    const sameUf = received.filter((m) => m.uf === sel.uf)
-    return {
-      brasil: received.filter((m) => perCapita(m) > v).length + 1,
-      uf: sameUf.filter((m) => perCapita(m) > v).length + 1,
-      totalBrasil: received.length,
-      totalUf: sameUf.length,
-    }
-  }, [data, byId, selectedId, pago])
-
-  const visibleIds = useMemo(() => {
-    if (!uf) return null
-    return new Set(inScope.map((m) => m.id))
-  }, [inScope, uf])
-
-  const searchResults = useMemo(() => {
-    const q = normalize(query.trim())
-    if (q.length < 2) return { municipios: [], parlamentares: [] }
-    return {
-      municipios: inScope.filter((m) => normalize(m.nome).includes(q)).slice(0, 6),
-      parlamentares: data.parlamentares
-        .map((p, i) => [p, i] as const)
-        .filter(([p]) => normalize(p.nome).includes(q))
-        .slice(0, 6),
-    }
-  }, [data, inScope, query])
+  const selected = selectedId ? byId.get(selectedId) : undefined
+  const rank = useMemo(() => computeRank(data, selected, pago), [data, selected, pago])
+  const visibleIds = useMemo(() => (uf ? new Set(inScope.map((m) => m.id)) : null), [inScope, uf])
+  const searchResults = useMemo(() => search(data, inScope, query), [data, inScope, query])
 
   const selectMunicipio = (id: string) => {
     setSelectedId(id)
@@ -169,9 +349,7 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
     setFocusIds(focusOf(data, { uf: next, parl: null, year }))
   }
 
-  const selected = selectedId ? byId.get(selectedId) ?? null : null
-  const periodo = year === null ? `${anos[0]}–${anos[anos.length - 1]}` : String(year)
-  const legendStops = [0, ...breaks]
+  const periodo = periodLabel(anos, year)
 
   return (
     <div className="layout">
@@ -191,47 +369,9 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
           <Credit />
         </header>
 
-        {parl !== null && (
-          <div className="parl-chip">
-            <Avatar parlamentar={data.parlamentares[parl]} size={48} />
-            <div className="parl-chip-text">
-              <span className="muted">Mostrando só as emendas de</span>
-              <strong>{data.parlamentares[parl].nome}</strong>
-              <small>
-                {parlLabel(data.parlamentares[parl])}
-                {data.parlamentares[parl].url && (
-                  <>
-                    {' · '}
-                    <a href={data.parlamentares[parl].url!} target="_blank" rel="noopener noreferrer">
-                      perfil oficial
-                    </a>
-                  </>
-                )}
-              </small>
-            </div>
-            <button onClick={() => pickParl(null)} aria-label="Remover filtro de parlamentar">
-              ×
-            </button>
-          </div>
-        )}
+        {parl !== null && <ParlChip parlamentar={data.parlamentares[parl]} onClear={() => pickParl(null)} />}
 
-        <section className="counters">
-          <div className="counter">
-            <span className="counter-value">{formatBRL(totals.total)}</span>
-            <span className="counter-label">pago a municípios</span>
-            <span className="counter-pct">{periodo}</span>
-          </div>
-          <div className="counter">
-            <span className="counter-value">{formatBRL(totals.perCapita, false)}</span>
-            <span className="counter-label">por habitante</span>
-            <span className="counter-pct">{uf || 'Brasil'}</span>
-          </div>
-          <div className="counter">
-            <span className="counter-value">{totals.receberam.toLocaleString('pt-BR')}</span>
-            <span className="counter-label">municípios receberam</span>
-            <span className="counter-pct">de {inScope.length.toLocaleString('pt-BR')}</span>
-          </div>
-        </section>
+        <Counters totals={totals} periodo={periodo} uf={uf} municipiosNoEscopo={inScope.length} />
         {estadoPago > 0 && (
           <p className="muted">
             Além disso, o governo do estado de {uf} recebeu {formatBRL(estadoPago)} em {periodo}.
@@ -239,119 +379,27 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
         )}
 
         <section className="controls">
-          <div className="search">
-            <input
-              type="search"
-              placeholder="Buscar município ou parlamentar…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
-            {(searchResults.municipios.length > 0 || searchResults.parlamentares.length > 0) && (
-              <ul className="search-results">
-                {searchResults.municipios.map((m) => (
-                  <li key={m.id}>
-                    <button onClick={() => selectMunicipio(m.id)}>
-                      <span className="dot" style={{ background: SCALE[Math.max(0, classOfMun(m))] }} />
-                      {m.nome} <small>{m.uf}</small>
-                    </button>
-                  </li>
-                ))}
-                {searchResults.parlamentares.map(([p, i]) => (
-                  <li key={`p${i}`}>
-                    <button onClick={() => pickParl(i)}>
-                      <Avatar parlamentar={p} size={24} />
-                      <span className="person">
-                        {p.nome} <small>{parlLabel(p)}</small>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="row">
-            <label>
-              Período
-              <select
-                value={year ?? ''}
-                onChange={(e) => setYear(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">
-                  {anos[0]}–{anos[anos.length - 1]}
-                </option>
-                {anos.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Estado
-              <select value={uf} onChange={(e) => changeUf(e.target.value)}>
-                <option value="">Brasil</option>
-                {UFS.map((u) => (
-                  <option key={u} value={u}>
-                    {u}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="segmented" role="group" aria-label="Métrica do mapa">
-            <button className={metric === 'per_capita' ? 'active' : ''} onClick={() => setMetric('per_capita')}>
-              Por habitante
-            </button>
-            <button className={metric === 'total' ? 'active' : ''} onClick={() => setMetric('total')}>
-              Valor total
-            </button>
-          </div>
+          <SearchBox
+            query={query}
+            results={searchResults}
+            colorOf={colorOf}
+            onQueryChange={setQuery}
+            onPickMunicipio={selectMunicipio}
+            onPickParl={pickParl}
+          />
+          <Filters anos={anos} year={year} uf={uf} onYearChange={setYear} onUfChange={changeUf} />
+          <Segmented label="Métrica do mapa" options={METRIC_OPTIONS} value={metric} onChange={setMetric} />
         </section>
 
-        <section className="ranking">
-          <h2>
-            Municípios que mais receberam {metric === 'per_capita' ? 'por habitante' : 'no total'}
-          </h2>
-          {topMunicipios.length === 0 ? (
-            <p className="muted">Nenhum repasse no filtro atual.</p>
-          ) : (
-            <ol>
-              {topMunicipios.map((m, i) => (
-                <li key={m.id}>
-                  <button onClick={() => selectMunicipio(m.id)}>
-                    <span className="rank-pos">{i + 1}</span>
-                    <span className="rank-name">
-                      {m.nome} <small>{m.uf}</small>
-                    </span>
-                    <span className="rank-value">{formatMetric(valueOf(m), metric)}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
+        <MunicipiosRanking municipios={topMunicipios} metric={metric} valueOf={valueOf} onSelect={selectMunicipio} />
 
         {parl === null && (
-          <section className="ranking">
-            <h2>Parlamentares que mais enviaram {uf ? `para ${uf}` : ''}</h2>
-            <ol>
-              {topParlamentares.map(([p, v], i) => (
-                <li key={p}>
-                  <button onClick={() => pickParl(p)} title="Ver no mapa para onde foi o dinheiro">
-                    <span className="rank-pos">{i + 1}</span>
-                    <Avatar parlamentar={data.parlamentares[p]} size={32} />
-                    <span className="rank-name person">
-                      {data.parlamentares[p].nome}
-                      <small>{parlLabel(data.parlamentares[p], true)}</small>
-                    </span>
-                    <span className="rank-value">{formatBRL(v)}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          </section>
+          <ParlamentaresRanking
+            parlamentares={data.parlamentares}
+            rows={topParlamentares}
+            uf={uf}
+            onPick={pickParl}
+          />
         )}
 
         <Sources meta={data.meta} />
@@ -369,27 +417,7 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
           theme={theme}
           onSelect={setSelectedId}
         />
-        <div className="legend">
-          <span className="legend-title">
-            {metric === 'per_capita' ? 'R$ por habitante' : 'Valor pago'}, {periodo}
-          </span>
-          <div className="legend-scale">
-            <span className="legend-item">
-              <span className="swatch empty" />
-              não recebeu
-            </span>
-            {legendStops.map((from, i) => (
-              <span key={i} className="legend-item">
-                <span className="swatch" style={{ background: SCALE[i] }} />
-                {i === 0
-                  ? `até ${formatBRL(Math.round(breaks[0] ?? 0))}`
-                  : i === legendStops.length - 1
-                    ? `${formatBRL(Math.round(from))}+`
-                    : `${formatBRL(Math.round(from))}–${formatBRL(Math.round(legendStops[i + 1])).replace(/^R\$\s/, '')}`}
-              </span>
-            ))}
-          </div>
-        </div>
+        <Legend metric={metric} periodo={periodo} breaks={breaks} />
         {selected && (
           <DetailPanel
             municipio={selected}

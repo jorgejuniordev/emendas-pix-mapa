@@ -38,26 +38,127 @@ const BRAZIL_BOUNDS: LngLatBoundsLike = [
   [-34.7, 5.3],
 ]
 
-function bboxOf(features: MeshFeature[]): LngLatBoundsLike | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  const visit = (c: unknown): void => {
-    if (typeof (c as number[])[0] === 'number') {
-      const [x, y] = c as number[]
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
-      return
-    }
-    for (const child of c as unknown[]) visit(child)
+const SOURCE = 'mun'
+const FILL_LAYER = 'mun-fill'
+const LINE_LAYER = 'mun-line'
+const SELECTED_LAYER = 'mun-selected'
+
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number }
+
+const isPosition = (c: unknown): c is number[] => typeof (c as number[])[0] === 'number'
+
+function extendBounds(b: Bounds, coords: unknown): void {
+  if (!isPosition(coords)) {
+    for (const child of coords as unknown[]) extendBounds(b, child)
+    return
   }
-  for (const f of features) visit(f.geometry.coordinates)
-  if (!Number.isFinite(minX)) return null
+  const [x, y] = coords
+  b.minX = Math.min(b.minX, x)
+  b.maxX = Math.max(b.maxX, x)
+  b.minY = Math.min(b.minY, y)
+  b.maxY = Math.max(b.maxY, y)
+}
+
+function bboxOf(features: MeshFeature[]): LngLatBoundsLike | null {
+  const b: Bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+  for (const f of features) extendBounds(b, f.geometry.coordinates)
+  if (!Number.isFinite(b.minX)) return null
   return [
-    [minX, minY],
-    [maxX, maxY],
+    [b.minX, b.minY],
+    [b.maxX, b.maxY],
   ]
 }
+
+function createMap(container: HTMLDivElement): MapLibreMap {
+  const map = new MapLibreMap({
+    container,
+    style: {
+      version: 8,
+      sources: {},
+      layers: [{ id: 'bg', type: 'background', paint: { 'background-color': MAP_THEME.claro.background } }],
+    },
+    bounds: BRAZIL_BOUNDS,
+    fitBoundsOptions: { padding: 20 },
+    attributionControl: { customAttribution: 'Malha: IBGE' },
+  })
+  map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+  return map
+}
+
+function addMunicipioLayers(map: MapLibreMap, mesh: Mesh): void {
+  map.addSource(SOURCE, { type: 'geojson', data: mesh as never, promoteId: 'id' })
+  map.addLayer({
+    id: FILL_LAYER,
+    type: 'fill',
+    source: SOURCE,
+    paint: {
+      'fill-opacity': ['case', ['boolean', ['feature-state', 'hidden'], false], 0.08, 0.85],
+    },
+  })
+  map.addLayer({
+    id: LINE_LAYER,
+    type: 'line',
+    source: SOURCE,
+    paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.1, 8, 0.6] },
+  })
+  map.addLayer({
+    id: SELECTED_LAYER,
+    type: 'line',
+    source: SOURCE,
+    paint: {
+      'line-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2.5, 0],
+    },
+  })
+}
+
+function bindTooltip(map: MapLibreMap, tooltipFor: (id: string | undefined) => string | null): void {
+  const popup = new Popup({ closeButton: false, closeOnClick: false, offset: 8 })
+  map.on('mousemove', FILL_LAYER, (e) => {
+    const text = tooltipFor(e.features?.[0]?.properties?.id as string | undefined)
+    if (!text) return
+    map.getCanvas().style.cursor = 'pointer'
+    popup.setLngLat(e.lngLat).setText(text).addTo(map)
+  })
+  map.on('mouseleave', FILL_LAYER, () => {
+    map.getCanvas().style.cursor = ''
+    popup.remove()
+  })
+}
+
+function bindClick(map: MapLibreMap, onSelect: (id: string | null) => void): void {
+  map.on('click', (e) => {
+    const f = map.queryRenderedFeatures(e.point, { layers: [FILL_LAYER] })[0]
+    onSelect((f?.properties?.id as string) ?? null)
+  })
+}
+
+function applyTheme(map: MapLibreMap, theme: Theme): void {
+  const t = MAP_THEME[theme]
+  map.setPaintProperty('bg', 'background-color', t.background)
+  map.setPaintProperty(FILL_LAYER, 'fill-color', [
+    'match',
+    ['coalesce', ['feature-state', 'cls'], -1],
+    ...SCALE.flatMap((c, i) => [i, c]),
+    t.empty,
+  ] as never)
+  map.setPaintProperty(LINE_LAYER, 'line-color', t.border)
+  map.setPaintProperty(SELECTED_LAYER, 'line-color', t.selected)
+}
+
+function fitFocus(map: MapLibreMap, mesh: Mesh, focusIds: string[] | null): void {
+  if (!focusIds) {
+    map.fitBounds(BRAZIL_BOUNDS, { padding: 20 })
+    return
+  }
+  const ids = new Set(focusIds)
+  const bounds = bboxOf(mesh.features.filter((f) => ids.has(f.properties.id)))
+  if (bounds) map.fitBounds(bounds, { padding: 40, maxZoom: 10 })
+}
+
+const isHidden = (id: string, visibleIds: Set<string> | null) => (visibleIds ? !visibleIds.has(id) : false)
+
+const setSelected = (map: MapLibreMap, id: string, selected: boolean) =>
+  map.setFeatureState({ source: SOURCE, id }, { selected })
 
 export function MapView({
   mesh,
@@ -92,64 +193,18 @@ export function MapView({
 
   useEffect(() => {
     if (!container.current) return
-    const map = new MapLibreMap({
-      container: container.current,
-      style: {
-        version: 8,
-        sources: {},
-        layers: [{ id: 'bg', type: 'background', paint: { 'background-color': MAP_THEME.claro.background } }],
-      },
-      bounds: BRAZIL_BOUNDS,
-      fitBoundsOptions: { padding: 20 },
-      attributionControl: { customAttribution: 'Malha: IBGE' },
-    })
-    map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+    const map = createMap(container.current)
     mapRef.current = map
 
-    const popup = new Popup({ closeButton: false, closeOnClick: false, offset: 8 })
-
     map.on('load', () => {
-      map.addSource('mun', { type: 'geojson', data: mesh as never, promoteId: 'id' })
-      map.addLayer({
-        id: 'mun-fill',
-        type: 'fill',
-        source: 'mun',
-        paint: {
-          'fill-opacity': ['case', ['boolean', ['feature-state', 'hidden'], false], 0.08, 0.85],
-        },
-      })
-      map.addLayer({
-        id: 'mun-line',
-        type: 'line',
-        source: 'mun',
-        paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.1, 8, 0.6] },
-      })
-      map.addLayer({
-        id: 'mun-selected',
-        type: 'line',
-        source: 'mun',
-        paint: {
-          'line-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2.5, 0],
-        },
-      })
+      addMunicipioLayers(map, mesh)
       setLoadedMap(map)
     })
-
-    map.on('mousemove', 'mun-fill', (e) => {
-      const id = e.features?.[0]?.properties?.id as string | undefined
+    bindTooltip(map, (id) => {
       const m = id ? byIdRef.current.get(id) : undefined
-      if (!m) return
-      map.getCanvas().style.cursor = 'pointer'
-      popup.setLngLat(e.lngLat).setText(tooltipRef.current(m)).addTo(map)
+      return m ? tooltipRef.current(m) : null
     })
-    map.on('mouseleave', 'mun-fill', () => {
-      map.getCanvas().style.cursor = ''
-      popup.remove()
-    })
-    map.on('click', (e) => {
-      const f = map.queryRenderedFeatures(e.point, { layers: ['mun-fill'] })[0]
-      onSelectRef.current((f?.properties?.id as string) ?? null)
-    })
+    bindClick(map, (id) => onSelectRef.current(id))
 
     return () => {
       setLoadedMap(null)
@@ -164,50 +219,28 @@ export function MapView({
     for (const f of mesh.features) {
       const m = byId.get(f.properties.id)
       map.setFeatureState(
-        { source: 'mun', id: f.properties.id },
-        {
-          cls: m ? classOf(m) : -1,
-          hidden: visibleIds ? !visibleIds.has(f.properties.id) : false,
-        },
+        { source: SOURCE, id: f.properties.id },
+        { cls: m ? classOf(m) : -1, hidden: isHidden(f.properties.id, visibleIds) },
       )
     }
   }, [currentMap, mesh, byId, classOf, visibleIds])
 
   useEffect(() => {
     const map = currentMap()
-    if (!map) return
-    const t = MAP_THEME[theme]
-    map.setPaintProperty('bg', 'background-color', t.background)
-    map.setPaintProperty('mun-fill', 'fill-color', [
-      'match',
-      ['coalesce', ['feature-state', 'cls'], -1],
-      ...SCALE.flatMap((c, i) => [i, c]),
-      t.empty,
-    ] as never)
-    map.setPaintProperty('mun-line', 'line-color', t.border)
-    map.setPaintProperty('mun-selected', 'line-color', t.selected)
+    if (map) applyTheme(map, theme)
   }, [currentMap, theme])
 
   useEffect(() => {
     const map = currentMap()
     if (!map) return
-    if (prevSelected.current) {
-      map.setFeatureState({ source: 'mun', id: prevSelected.current }, { selected: false })
-    }
-    if (selectedId) map.setFeatureState({ source: 'mun', id: selectedId }, { selected: true })
+    if (prevSelected.current) setSelected(map, prevSelected.current, false)
+    if (selectedId) setSelected(map, selectedId, true)
     prevSelected.current = selectedId
   }, [currentMap, selectedId])
 
   useEffect(() => {
     const map = currentMap()
-    if (!map) return
-    if (!focusIds) {
-      map.fitBounds(BRAZIL_BOUNDS, { padding: 20 })
-      return
-    }
-    const ids = new Set(focusIds)
-    const bounds = bboxOf(mesh.features.filter((f) => ids.has(f.properties.id)))
-    if (bounds) map.fitBounds(bounds, { padding: 40, maxZoom: 10 })
+    if (map) fitFocus(map, mesh, focusIds)
   }, [currentMap, mesh, focusIds])
 
   return <div ref={container} className="map" />
