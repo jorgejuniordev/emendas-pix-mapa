@@ -78,7 +78,12 @@ function parseRoute(hash: string, data: Dataset | null): Route {
   }
 }
 
-const Loading = ({ children }: { children: string }) => <div className="loading">{children}</div>
+const Loading = ({ children }: { children: string }) => (
+  <div className="loading" role="status">
+    <span className="spinner" aria-hidden />
+    {children}
+  </div>
+)
 
 interface MapRouteProps {
   data: Dataset

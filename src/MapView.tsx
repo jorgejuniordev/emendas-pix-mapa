@@ -13,8 +13,8 @@ import { SCALE, type Municipio, type Theme } from './data'
 setWorkerUrl(workerUrl)
 
 const MAP_THEME: Record<Theme, { background: string; border: string; selected: string; empty: string }> = {
-  claro: { background: '#e8eef3', border: '#ffffff', selected: '#e11d48', empty: '#d1d5db' },
-  escuro: { background: '#0b1220', border: '#111827', selected: '#fb7185', empty: '#374151' },
+  claro: { background: '#e9eef2', border: '#ffffff', selected: '#e11d48', empty: '#d0d5dd' },
+  escuro: { background: '#0a0e15', border: '#111722', selected: '#fb7185', empty: '#313b4d' },
 }
 
 type Geometry = { type: 'Polygon' | 'MultiPolygon'; coordinates: number[][][] | number[][][][] }

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import {
-  SCALE,
+  UF_NOMES,
   formatBRL,
   inYear,
   parlLabel,
@@ -13,6 +13,7 @@ import {
 } from './data'
 import type { Rank } from './mapStats'
 import { Avatar } from './Avatar'
+import { CloseButton } from './Common'
 
 type Autoria = { pago: number; indicado: number }
 
@@ -40,7 +41,7 @@ function pagoNoPeriodo(porAno: number[], anos: number[], year: number | null): n
 }
 
 const populacaoLabel = (pop: number | null) =>
-  pop ? `${pop.toLocaleString('pt-BR')} habitantes` : 'População não informada'
+  pop ? `${pop.toLocaleString('pt-BR')} hab.` : 'população não informada'
 
 function YearBars({ anos, porAno, year }: { anos: number[]; porAno: number[]; year: number | null }) {
   const max = Math.max(1, ...porAno)
@@ -49,7 +50,7 @@ function YearBars({ anos, porAno, year }: { anos: number[]; porAno: number[]; ye
       {anos.map((ano, i) => (
         <div key={ano} className={`year ${year === ano ? 'active' : ''}`} title={formatBRL(porAno[i], false)}>
           <div className="year-bar-track">
-            <div className="year-bar" style={{ height: `${(porAno[i] / max) * 100}%`, background: SCALE[3] }} />
+            <div className="year-bar" style={{ height: `${(porAno[i] / max) * 100}%` }} />
           </div>
           <span>{String(ano).slice(2)}</span>
         </div>
@@ -124,13 +125,15 @@ export function DetailPanel({ municipio, anos, parlamentares, filter, rank, onPi
 
   return (
     <div className="detail">
-      <button className="detail-close" onClick={onClose} aria-label="Fechar">
-        ×
-      </button>
-      <h2>
-        {municipio.nome} <small>{municipio.uf}</small>
-      </h2>
-      <p className="muted">{populacaoLabel(municipio.pop)}</p>
+      <header className="detail-head">
+        <div>
+          <span className="eyebrow">
+            {UF_NOMES[municipio.uf]} · {populacaoLabel(municipio.pop)}
+          </span>
+          <h2>{municipio.nome}</h2>
+        </div>
+        <CloseButton onClick={onClose} label="Fechar" className="icon-button detail-close" />
+      </header>
 
       <div className="detail-stats">
         <div>

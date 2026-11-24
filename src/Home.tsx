@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import {
+  UF_NOMES,
   formatBRL,
   pagoPorParlamentar,
   parlLabel,
@@ -21,7 +22,7 @@ import {
   type PartidoRow,
 } from './rankings'
 import { Avatar } from './Avatar'
-import { Bar, Credit, Segmented, Sources, ThemeToggle, type Option } from './Common'
+import { Bar, CloseButton, Icon, Segmented, Sources, TopBar, type Option } from './Common'
 
 const COLLAPSED = 10
 
@@ -84,7 +85,7 @@ function RankContent({ pos, avatar, name, detail, value, ratio }: RankContentPro
       <span className="rank-body">
         <span className="rank-line">
           <span className="rank-name person">
-            {name}
+            <span>{name}</span>
             <small>{detail}</small>
           </span>
           <span className="rank-value">{value}</span>
@@ -95,11 +96,34 @@ function RankContent({ pos, avatar, name, detail, value, ratio }: RankContentPro
   )
 }
 
-function MapCta({ year }: { year: number | null }) {
+function MapCta({ year, label = 'Explorar o mapa' }: { year: number | null; label?: string }) {
   return (
     <a className="cta" href={mapHref({ year })}>
-      Abrir mapa completo →
+      <Icon name="map" />
+      {label}
+      <Icon name="arrow-right" size={16} />
     </a>
+  )
+}
+
+function CardHead({ index, title, description }: { index: number; title: string; description: string }) {
+  return (
+    <header className="card-head">
+      <span className="card-index">{String(index).padStart(2, '0')}</span>
+      <div>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+    </header>
+  )
+}
+
+function HeroStat({ value, label }: { value: string; label: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   )
 }
 
@@ -108,20 +132,34 @@ interface HeroProps {
   periodo: string
   municipios: number
   governos: number
+  parlamentares: number
   year: number | null
 }
 
-function Hero({ total, periodo, municipios, governos, year }: HeroProps) {
+function Hero({ total, periodo, municipios, governos, parlamentares, year }: HeroProps) {
   return (
     <section className="hero">
-      <div>
-        <span className="hero-value">{formatBRL(total, true, 1)}</span>
-        <span className="hero-label">
-          pagos em emendas Pix {periodo}, para {municipios.toLocaleString('pt-BR')} municípios e {governos}{' '}
-          governos estaduais
-        </span>
+      <div className="hero-copy">
+        <span className="eyebrow">Orçamento da União · Transferências especiais</span>
+        <h1>Para onde vai o dinheiro das emendas Pix</h1>
+        <p className="lede">
+          Quem mandou dinheiro por emenda Pix, para onde foi e quanto já caiu na conta das prefeituras e
+          dos governos estaduais, sem convênio.
+        </p>
+        <div className="hero-actions">
+          <MapCta year={year} />
+          <span className="muted">Município por município, com busca por cidade ou parlamentar</span>
+        </div>
       </div>
-      <MapCta year={year} />
+      <aside className="hero-figure" aria-label="Resumo do período">
+        <span className="hero-figure-label">Total pago {periodo}</span>
+        <span className="hero-value">{formatBRL(total, true, 1)}</span>
+        <dl className="hero-stats">
+          <HeroStat value={municipios.toLocaleString('pt-BR')} label="municípios" />
+          <HeroStat value={String(governos)} label="governos estaduais" />
+          <HeroStat value={parlamentares.toLocaleString('pt-BR')} label="parlamentares" />
+        </dl>
+      </aside>
     </section>
   )
 }
@@ -142,14 +180,14 @@ function ParlamentaresBoard({ data, rows, year, casa, partido, onCasaChange, onC
 
   return (
     <section className="card board">
-      <h2>Quem mais enviou</h2>
+      <CardHead index={1} title="Quem mais enviou" description="Parlamentares pelo valor já pago. Clique para ver no mapa." />
       <Segmented label="Casa" options={CASA_OPTIONS} value={casa} onChange={onCasaChange} />
       {partido && (
         <p className="filter-chip">
-          Só do {partido}
-          <button onClick={onClearPartido} aria-label="Remover filtro de partido">
-            ×
-          </button>
+          <span>
+            Filtrando por <strong>{partido}</strong>
+          </span>
+          <CloseButton onClick={onClearPartido} label="Remover filtro de partido" />
         </p>
       )}
       {rows.length === 0 && <p className="muted">Nenhum repasse no filtro atual.</p>}
@@ -189,8 +227,11 @@ function PartidosBoard({ rows, selected, onSelect }: PartidosBoardProps) {
 
   return (
     <section className="card board">
-      <h2>Por partido</h2>
-      <p className="muted">Soma do que os parlamentares de cada partido enviaram. Clique para ver os nomes.</p>
+      <CardHead
+        index={2}
+        title="Por partido"
+        description="Soma do que os parlamentares de cada partido enviaram. Clique para filtrar os nomes."
+      />
       <ol>
         {visible.map((row, i) => (
           <li key={row.sigla}>
@@ -224,7 +265,7 @@ function EstadosBoard({ rows, year, metric, onMetricChange }: EstadosBoardProps)
 
   return (
     <section className="card board">
-      <h2>Por estado</h2>
+      <CardHead index={3} title="Por estado" description="Prefeituras somadas ao governo estadual de cada UF." />
       <Segmented
         label="Métrica dos estados"
         options={ESTADO_METRIC_OPTIONS}
@@ -237,7 +278,11 @@ function EstadosBoard({ rows, year, metric, onMetricChange }: EstadosBoardProps)
             <a className="rank-row" href={mapHref({ uf: e.uf, year })} title={`Ver ${e.uf} no mapa`}>
               <RankContent
                 pos={i + 1}
-                name={e.uf}
+                name={
+                  <>
+                    {UF_NOMES[e.uf]} <span className="uf-tag">{e.uf}</span>
+                  </>
+                }
                 detail={
                   <>
                     prefeituras {formatBRL(e.municipios)}
@@ -284,48 +329,48 @@ export function Home({ data, theme, onToggleTheme }: Props) {
   ]
 
   return (
-    <div className="home">
-      <header className="home-header">
-        <div className="title-row">
-          <h1>Emendas Pix</h1>
-          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-        </div>
-        <p className="subtitle">
-          Quem mandou dinheiro por emenda Pix (transferência especial), para onde foi e quanto já
-          caiu na conta das prefeituras e dos estados
-        </p>
-        <Credit />
-      </header>
-
-      <Hero
-        total={sum(estados.map((e) => e.total))}
-        periodo={periodoPorExtenso(anos, year)}
-        municipios={municipiosReceberam}
-        governos={estados.filter((e) => e.governo > 0).length}
-        year={year}
-      />
-
-      <Segmented className="period" label="Período" options={periodOptions} value={year} onChange={setYear} />
-
-      <div className="home-grid">
-        <ParlamentaresBoard
-          data={data}
-          rows={parlamentares}
+    <div className="page">
+      <TopBar page="home" theme={theme} onToggleTheme={onToggleTheme} />
+      <main className="home">
+        <Hero
+          total={sum(estados.map((e) => e.total))}
+          periodo={periodoPorExtenso(anos, year)}
+          municipios={municipiosReceberam}
+          governos={estados.filter((e) => e.governo > 0).length}
+          parlamentares={porParl.size}
           year={year}
-          casa={casa}
-          partido={partido}
-          onCasaChange={setCasa}
-          onClearPartido={() => setPartido(null)}
         />
-        <PartidosBoard rows={partidos} selected={partido} onSelect={setPartido} />
-        <EstadosBoard rows={estados} year={year} metric={estadoMetric} onMetricChange={setEstadoMetric} />
-      </div>
 
-      <div className="home-cta">
-        <MapCta year={year} />
-        <span className="muted">Veja município por município, com busca por cidade ou parlamentar</span>
-      </div>
+        <div className="toolbar">
+          <span className="toolbar-label">Período</span>
+          <Segmented className="period" label="Período" options={periodOptions} value={year} onChange={setYear} />
+        </div>
 
+        <div className="home-grid">
+          <ParlamentaresBoard
+            data={data}
+            rows={parlamentares}
+            year={year}
+            casa={casa}
+            partido={partido}
+            onCasaChange={setCasa}
+            onClearPartido={() => setPartido(null)}
+          />
+          <PartidosBoard rows={partidos} selected={partido} onSelect={setPartido} />
+          <EstadosBoard rows={estados} year={year} metric={estadoMetric} onMetricChange={setEstadoMetric} />
+        </div>
+
+        <section className="cta-band">
+          <div>
+            <h2>Veja onde o dinheiro caiu</h2>
+            <p>
+              O mapa mostra os 5.570 municípios coloridos pelo valor recebido por habitante, com o
+              detalhe de quem enviou cada real.
+            </p>
+          </div>
+          <MapCta year={year} label="Abrir mapa completo" />
+        </section>
+      </main>
       <Sources meta={data.meta} />
     </div>
   )

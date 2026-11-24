@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import {
   SCALE,
   UFS,
+  UF_NOMES,
   classOf,
   formatBRL,
   formatMetric,
@@ -32,7 +33,7 @@ import {
 import { MapView, type Mesh } from './MapView'
 import { DetailPanel } from './DetailPanel'
 import { Avatar } from './Avatar'
-import { Credit, ExternalLink, Segmented, Sources, ThemeToggle, type Option } from './Common'
+import { Brand, CloseButton, ExternalLink, Icon, Segmented, Sources, ThemeToggle, type Option } from './Common'
 
 const TOP_MUNICIPIOS = 15
 const TOP_PARLAMENTARES = 10
@@ -41,6 +42,8 @@ const METRIC_OPTIONS: Option<Metric>[] = [
   { value: 'per_capita', label: 'Por habitante' },
   { value: 'total', label: 'Valor total' },
 ]
+
+const UFS_POR_NOME = [...UFS].sort((a, b) => UF_NOMES[a].localeCompare(UF_NOMES[b], 'pt-BR'))
 
 const metricTitle = (metric: Metric) => (metric === 'per_capita' ? 'por habitante' : 'no total')
 const legendTitle = (metric: Metric) => (metric === 'per_capita' ? 'R$ por habitante' : 'Valor pago')
@@ -62,9 +65,7 @@ function ParlChip({ parlamentar, onClear }: { parlamentar: Parlamentar; onClear:
           )}
         </small>
       </div>
-      <button onClick={onClear} aria-label="Remover filtro de parlamentar">
-        ×
-      </button>
+      <CloseButton onClick={onClear} label="Remover filtro de parlamentar" />
     </div>
   )
 }
@@ -113,6 +114,7 @@ function SearchBox({ query, results, colorOf, onQueryChange, onPickMunicipio, on
   const hasResults = results.municipios.length > 0 || results.parlamentares.length > 0
   return (
     <div className="search">
+      <Icon name="search" size={16} />
       <input
         type="search"
         placeholder="Buscar município ou parlamentar…"
@@ -171,9 +173,9 @@ function Filters({ anos, year, uf, onYearChange, onUfChange }: FiltersProps) {
         Estado
         <select value={uf} onChange={(e) => onUfChange(e.target.value)}>
           <option value="">Brasil</option>
-          {UFS.map((u) => (
+          {UFS_POR_NOME.map((u) => (
             <option key={u} value={u}>
-              {u}
+              {UF_NOMES[u]}
             </option>
           ))}
         </select>
@@ -354,19 +356,20 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
   return (
     <div className="layout">
       <aside className="sidebar">
-        <header>
-          <a className="back-link" href="#/">
-            ← Rankings
-          </a>
-          <div className="title-row">
-            <h1>Emendas Pix</h1>
+        <header className="sidebar-head">
+          <div className="sidebar-top">
+            <Brand />
             <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           </div>
+          <a className="back-link" href="#/">
+            <Icon name="arrow-left" size={14} />
+            Voltar aos rankings
+          </a>
+          <h1>Quanto cada município recebeu</h1>
           <p className="subtitle">
-            Quanto cada município recebeu em emendas Pix (transferências especiais) e de quais
-            deputados e senadores
+            Emendas Pix (transferências especiais) pagas a cada prefeitura e os deputados e senadores
+            que enviaram o dinheiro
           </p>
-          <Credit />
         </header>
 
         {parl !== null && <ParlChip parlamentar={data.parlamentares[parl]} onClear={() => pickParl(null)} />}
@@ -402,7 +405,7 @@ export function MapPage({ data, mesh, initial, theme, onToggleTheme }: Props) {
           />
         )}
 
-        <Sources meta={data.meta} />
+        <Sources meta={data.meta} compact />
       </aside>
 
       <main className="map-wrap">
